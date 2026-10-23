@@ -68,6 +68,12 @@ db.exec(`
   );
 `)
 
+// Existing projects keep their original orientation until the user changes it.
+const photoColumns = db.prepare('PRAGMA table_info(photos)').all() as { name: string }[]
+if (!photoColumns.some((column) => column.name === 'rotation')) {
+  db.exec('ALTER TABLE photos ADD COLUMN rotation INTEGER NOT NULL DEFAULT 0')
+}
+
 export function projectDir(projectId: string) {
   const dir = path.join(UPLOADS_DIR, projectId)
   fs.mkdirSync(dir, { recursive: true })

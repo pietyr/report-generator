@@ -24,7 +24,7 @@ const tierIds = ref<string[]>([])
 
 const previewSrc = computed(() =>
   current.value
-    ? `${api.photoUrl(id.value, current.value.id, 'preview')}&t=${current.value.id}`
+    ? `${api.photoUrl(id.value, current.value.id, 'preview', current.value.rotation)}&t=${current.value.id}`
     : '',
 )
 
@@ -196,6 +196,7 @@ watch(id, async () => {
 
     <div v-else class="card stack">
       <p class="ok" style="margin: 0">Wszystkie zdjęcia otagowane.</p>
+      <p class="muted" style="margin: 0">Na ekranie generowania możesz jeszcze przejrzeć zdjęcia, zmienić tagi lub usunąć zdjęcia.</p>
       <button class="btn accent" @click="router.push(`/projects/${id}/generate`)">
         Przejdź do generowania →
       </button>

@@ -1,13 +1,18 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { api, type Project } from '../api'
+import { api, type Photo, type Project } from '../api'
+import PhotoGallery from '../components/PhotoGallery.vue'
 
 const route = useRoute()
 const router = useRouter()
 const id = computed(() => route.params.id as string)
 
 const project = ref<Project | null>(null)
+const photos = ref<Photo[]>([])
+const editingPhotos = ref(false)
+const photosChanged = ref(false)
+const tagged = computed(() => photos.value.filter((p) => p.category !== null || p.excluded === 1).length)
 const error = ref('')
 const generating = ref(false)
 const done = ref(false)
@@ -42,8 +47,20 @@ async function loadLatest() {
 }
 
 async function load() {
-  project.value = await api.getProject(id.value)
-  await loadLatest()
+  error.value = ''
+  photosChanged.value = false
+  editingPhotos.value = false
+  try {
+    const [loadedProject, loadedPhotos] = await Promise.all([
+      api.getProject(id.value),
+      api.listPhotos(id.value),
+    ])
+    project.value = loadedProject
+    photos.value = loadedPhotos
+    await loadLatest()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  }
 }
 
 function stopPoll() {
@@ -74,6 +91,7 @@ async function downloadLatest() {
 }
 
 async function generate() {
+  if (editingPhotos.value || generating.value) return
   generating.value = true
   error.value = ''
   done.value = false
@@ -113,6 +131,7 @@ async function generate() {
     if (!res.ok) throw new Error('Nie udało się pobrać ZIP')
     triggerDownload(await res.blob())
     done.value = true
+    photosChanged.value = false
     progressMessage.value = 'ZIP pobrany'
     await loadLatest()
   } catch (e) {
@@ -151,8 +170,8 @@ onUnmounted(stopPoll)
         <li :class="{ ok: project.partners.length > 0 }">
           Partnerzy: {{ project.partners.length }}
         </li>
-        <li :class="{ ok: project.photo_tagged > 0 }">
-          Otagowane zdjęcia: {{ project.photo_tagged }} / {{ project.photo_total }}
+        <li :class="{ ok: tagged > 0 }">
+          Otagowane zdjęcia: {{ tagged }} / {{ photos.length }}
         </li>
         <li :class="{ ok: !!project.event_url }">
           URL wydarzenia: {{ project.event_url || 'pusty' }}
@@ -181,6 +200,9 @@ onUnmounted(stopPoll)
 
       <p v-if="error" class="error">{{ error }}</p>
       <p v-if="done" class="ok">Pobieranie rozpoczęte.</p>
+      <p v-if="photosChanged && hasLatest" class="muted" role="status">
+        Zdjęcia zostały zmienione. Wygeneruj raporty ponownie, aby uwzględnić zmiany w ZIP.
+      </p>
 
       <div class="row">
         <button class="btn secondary" @click="router.push(`/projects/${id}/tagging`)">
@@ -196,14 +218,24 @@ onUnmounted(stopPoll)
         </button>
         <button
           class="btn accent"
-          :disabled="!canGenerate || generating"
+          :disabled="!canGenerate || generating || editingPhotos"
           @click="generate"
         >
           {{ generateButtonLabel }}
         </button>
       </div>
     </div>
+
+    <PhotoGallery
+      :key="id"
+      v-model:photos="photos"
+      :project="project"
+      :disabled="generating"
+      @busy="editingPhotos = $event"
+      @changed="photosChanged = true; done = false"
+    />
   </div>
+  <p v-else-if="error" class="error" role="alert">{{ error }}</p>
   <p v-else class="muted">Ładowanie…</p>
 </template>
 

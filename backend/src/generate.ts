@@ -6,7 +6,7 @@ import { imageSize } from 'image-size'
 import PptxGenJSImport from 'pptxgenjs'
 import AdmZip from 'adm-zip'
 import { db, projectDir } from './db.js'
-import { preparePhotoDerivatives } from './images.js'
+import { preparePhotoDerivatives, withImageQueue } from './images.js'
 import type {
   PartnerRow,
   PhotoRow,
@@ -127,9 +127,11 @@ function absolutePhotoPath(projectId: string, relativePath: string) {
 
 async function resolvePhotoPath(projectId: string, photo: PhotoWithAssignments) {
   const abs = absolutePhotoPath(projectId, photo.path)
-  const prepared = await preparePhotoDerivatives(abs, photo.original_name)
-  if (prepared.full !== abs) {
-    const rel = path.relative(projectDir(projectId), prepared.full)
+  const prepared = await withImageQueue(() =>
+    preparePhotoDerivatives(abs, photo.original_name, photo.rotation),
+  )
+  if (prepared.source !== abs) {
+    const rel = path.relative(projectDir(projectId), prepared.source)
     db.prepare('UPDATE photos SET path = ? WHERE id = ?').run(rel, photo.id)
   }
   return prepared.full

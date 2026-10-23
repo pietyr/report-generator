@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, type Photo, type Project } from '../api'
+import PhotoGallery from '../components/PhotoGallery.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -12,6 +13,7 @@ const photos = ref<Photo[]>([])
 const error = ref('')
 const uploading = ref(false)
 const preparing = ref(false)
+const editingPhotos = ref(false)
 const progressLabel = ref('')
 const progressDone = ref(0)
 const progressTotal = ref(0)
@@ -99,14 +101,11 @@ async function onFiles(e: Event) {
   }
 }
 
-function thumbSrc(photoId: string) {
-  return `${api.photoUrl(id.value, photoId, 'thumb')}&t=${cacheKey.value}`
-}
-
 const tagged = computed(
   () => photos.value.filter((p) => p.category !== null || p.excluded === 1).length,
 )
-const busy = computed(() => uploading.value || preparing.value)
+const processing = computed(() => uploading.value || preparing.value)
+const busy = computed(() => processing.value || editingPhotos.value)
 
 onMounted(async () => {
   error.value = ''
@@ -114,6 +113,7 @@ onMounted(async () => {
   await preparePreviews()
 })
 watch(id, async () => {
+  editingPhotos.value = false
   error.value = ''
   progressLabel.value = ''
   await load()
@@ -143,7 +143,7 @@ watch(id, async () => {
         HEIC z iPhone’a są konwertowane do JPEG przy wgrywaniu. Przy dużej liczbie plików widać postęp poniżej.
       </p>
 
-      <div v-if="busy || progressLabel" class="progress-block">
+      <div v-if="processing || progressLabel" class="progress-block">
         <div class="progress-meta">
           <span>{{ progressLabel || 'Przetwarzanie…' }}</span>
           <span v-if="progressTotal">{{ progressDone }}/{{ progressTotal }} ({{ progressPct }}%)</span>
@@ -160,20 +160,14 @@ watch(id, async () => {
       <p v-if="error" class="error" style="white-space: pre-wrap">{{ error }}</p>
     </div>
 
-    <div class="card" style="margin-top: 1rem">
-      <div v-if="photos.length" class="thumbs">
-        <div
-          v-for="p in photos"
-          :key="`${p.id}-${cacheKey}`"
-          class="thumb"
-          :class="{ done: p.category !== null || p.excluded === 1, skipped: p.excluded === 1 }"
-        >
-          <img :src="thumbSrc(p.id)" :alt="p.original_name" loading="lazy" decoding="async" />
-          <div class="meta">{{ p.original_name }}</div>
-        </div>
-      </div>
-      <p v-else class="muted">Brak zdjęć.</p>
-    </div>
+    <PhotoGallery
+      :key="id"
+      v-model:photos="photos"
+      :project="project"
+      :disabled="processing"
+      :cache-key="cacheKey"
+      @busy="editingPhotos = $event"
+    />
 
     <div class="row" style="margin-top: 1rem">
       <button class="btn secondary" @click="router.push(`/projects/${id}/partners`)">
@@ -185,6 +179,14 @@ watch(id, async () => {
         @click="router.push(`/projects/${id}/tagging`)"
       >
         Tagowanie →
+      </button>
+      <button
+        v-if="photos.length && tagged === photos.length"
+        class="btn accent"
+        :disabled="busy"
+        @click="router.push(`/projects/${id}/generate`)"
+      >
+        Przejdź do generowania →
       </button>
     </div>
   </div>
@@ -214,38 +216,5 @@ watch(id, async () => {
   height: 100%;
   background: var(--accent);
   transition: width 0.2s ease;
-}
-.thumbs {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 0.75rem;
-}
-.thumb {
-  border: 2px solid var(--line);
-  border-radius: 10px;
-  overflow: hidden;
-  background: #faf8f5;
-}
-.thumb.done {
-  border-color: var(--ok);
-}
-.thumb.skipped {
-  border-color: var(--muted);
-  opacity: 0.55;
-}
-.thumb img {
-  display: block;
-  width: 100%;
-  aspect-ratio: 16 / 10;
-  object-fit: cover;
-  background: #e8e4de;
-}
-.meta {
-  font-size: 0.7rem;
-  padding: 0.35rem 0.45rem;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 </style>

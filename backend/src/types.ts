@@ -58,6 +58,7 @@ export type PhotoRow = {
   original_name: string
   category: number | null
   excluded: number
+  rotation: number
   tagged_at: string | null
   created_at: string
 }

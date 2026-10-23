@@ -37,6 +37,7 @@ export type Photo = {
   original_name: string
   category: number | null
   excluded: number
+  rotation: number
   tagged_at: string | null
   partnerIds: string[]
   tierIds: string[]
@@ -139,6 +140,10 @@ export const api = {
       method: 'DELETE',
     }),
   listPhotos: (id: string) => request<Photo[]>(`/api/projects/${id}/photos`),
+  deletePhoto: (id: string, photoId: string) =>
+    request<{ ok: boolean }>(`/api/projects/${id}/photos/${photoId}`, {
+      method: 'DELETE',
+    }),
   uploadPhotos: async (id: string, files: FileList | File[]) => {
     const fd = new FormData()
     for (const f of Array.from(files)) fd.append('files', f)
@@ -158,6 +163,7 @@ export const api = {
       excluded?: boolean
       partnerIds?: string[]
       tierIds?: string[]
+      rotation?: number
     },
   ) =>
     request<Photo>(`/api/projects/${id}/photos/${photoId}`, {
@@ -177,7 +183,8 @@ export const api = {
     projectId: string,
     photoId: string,
     size: 'thumb' | 'preview' | 'full' = 'preview',
-  ) => `/api/projects/${projectId}/photos/${photoId}/file?size=${size}`,
+    rotation = 0,
+  ) => `/api/projects/${projectId}/photos/${photoId}/file?size=${size}&rotation=${rotation}`,
   preparePhotos: (id: string) =>
     request<{ total: number; done: number; errors: string[] }>(
       `/api/projects/${id}/photos/prepare`,

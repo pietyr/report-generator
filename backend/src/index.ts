@@ -15,6 +15,7 @@ import { heicToJpeg, isHeic } from './heic.js'
 import {
   preparePhotoDerivatives,
   resolvePhotoVariant,
+  removePhotoFiles,
   withImageQueue,
   type PhotoVariant,
 } from './images.js'
@@ -482,7 +483,7 @@ app.post<{ Params: { id: string } }>(
           fs.writeFileSync(dest, buf)
           // Pass stored filename (not original HEIC name) so derivatives don't re-decode
           const prepared = await preparePhotoDerivatives(dest, filename)
-          const relative = path.relative(projectDir(req.params.id), prepared.full)
+          const relative = path.relative(projectDir(req.params.id), prepared.source)
           db.prepare(
             `INSERT INTO photos (id, project_id, path, original_name, category, excluded, tagged_at, created_at)
              VALUES (?, ?, ?, ?, NULL, 0, NULL, ?)`,
@@ -520,8 +521,8 @@ app.post<{ Params: { id: string } }>(
       return reply.code(404).send({ error: 'Nie znaleziono' })
     }
     const photos = db
-      .prepare('SELECT id, path, original_name FROM photos WHERE project_id = ?')
-      .all(req.params.id) as { id: string; path: string; original_name: string }[]
+      .prepare('SELECT id, path, original_name, rotation FROM photos WHERE project_id = ?')
+      .all(req.params.id) as { id: string; path: string; original_name: string; rotation: number }[]
 
     let done = 0
     const errors: string[] = []
@@ -532,8 +533,8 @@ app.post<{ Params: { id: string } }>(
           if (!fs.existsSync(abs)) {
             throw new Error('Brak pliku na dysku')
           }
-          const prepared = await preparePhotoDerivatives(abs, photo.original_name)
-          const relative = path.relative(projectDir(req.params.id), prepared.full)
+          const prepared = await preparePhotoDerivatives(abs, photo.original_name, photo.rotation)
+          const relative = path.relative(projectDir(req.params.id), prepared.source)
           if (relative !== photo.path) {
             db.prepare('UPDATE photos SET path = ? WHERE id = ?').run(
               relative,
@@ -560,7 +561,7 @@ app.get<{
   const photo = db
     .prepare('SELECT * FROM photos WHERE id = ? AND project_id = ?')
     .get(req.params.photoId, req.params.id) as
-    | { id: string; path: string; original_name: string }
+    | { id: string; path: string; original_name: string; rotation: number }
     | undefined
   if (!photo) return reply.code(404).send({ error: 'Nie znaleziono' })
   const abs = path.join(projectDir(req.params.id), photo.path)
@@ -571,7 +572,7 @@ app.get<{
     raw === 'thumb' || raw === 'full' ? raw : 'preview'
 
   try {
-    const resolved = await resolvePhotoVariant(abs, photo.original_name, size)
+    const resolved = await resolvePhotoVariant(abs, photo.original_name, size, photo.rotation)
     if (resolved.fullPath !== abs) {
       const jpegRel = path.relative(
         projectDir(req.params.id),
@@ -583,7 +584,7 @@ app.get<{
       )
     }
     reply.header('Cache-Control', 'public, max-age=86400')
-    reply.type('image/jpeg')
+    reply.type(path.extname(resolved.path).toLowerCase() === '.png' ? 'image/png' : 'image/jpeg')
     return reply.send(fs.createReadStream(resolved.path))
   } catch (err) {
     req.log.error(err)
@@ -615,6 +616,7 @@ app.patch<{
     excluded?: boolean
     partnerIds?: string[]
     tierIds?: string[]
+    rotation?: number
   }
 }>('/api/projects/:id/photos/:photoId', async (req, reply) => {
   const photo = db
@@ -622,7 +624,10 @@ app.patch<{
     .get(req.params.photoId, req.params.id)
   if (!photo) return reply.code(404).send({ error: 'Nie znaleziono' })
 
-  const { category, excluded, partnerIds, tierIds } = req.body
+  const { category, excluded, partnerIds, tierIds, rotation } = req.body
+  if (rotation !== undefined && ![0, 90, 180, 270].includes(rotation)) {
+    return reply.code(400).send({ error: 'Obrót musi wynosić 0°, 90°, 180° lub 270°.' })
+  }
   const now = new Date().toISOString()
 
   if (excluded === true) {
@@ -672,6 +677,10 @@ app.patch<{
     }
   }
 
+  if (rotation !== undefined) {
+    db.prepare('UPDATE photos SET rotation = ? WHERE id = ?').run(rotation, req.params.photoId)
+  }
+
   touch(req.params.id)
   const updated = db
     .prepare('SELECT * FROM photos WHERE id = ?')
@@ -698,7 +707,7 @@ app.delete<{ Params: { id: string; photoId: string } }>(
     if (!photo) return reply.code(404).send({ error: 'Nie znaleziono' })
     db.prepare('DELETE FROM photos WHERE id = ?').run(req.params.photoId)
     const abs = path.join(projectDir(req.params.id), photo.path)
-    fs.rmSync(abs, { force: true })
+    removePhotoFiles(abs)
     touch(req.params.id)
     return { ok: true }
   },

@@ -6,9 +6,16 @@ import { ensureJpegPath, isHeic } from './heic.js'
 export type PhotoVariant = 'thumb' | 'preview' | 'full'
 
 export type PreparedPaths = {
+  source: string
   full: string
   preview: string
   thumb: string
+}
+
+function rotatedPath(source: string, rotation: number) {
+  if (rotation === 0) return source
+  const base = path.basename(source, path.extname(source))
+  return path.join(path.dirname(source), `${base}_rotated_${rotation}.png`)
 }
 
 function derivativePath(fullPath: string, kind: 'preview' | 'thumb') {
@@ -65,13 +72,19 @@ async function writeDerivative(
 export async function preparePhotoDerivatives(
   absPath: string,
   originalName?: string,
+  rotation = 0,
 ): Promise<PreparedPaths> {
-  const full = await ensureJpegPath(absPath, originalName)
+  const source = await ensureJpegPath(absPath, originalName)
+  const full = rotatedPath(source, rotation)
+  if (rotation !== 0 && !isFresh(source, full)) {
+    // Always rotate the source, so repeated edits do not degrade image quality.
+    await sharp(source).autoOrient().rotate(rotation).png().toFile(full)
+  }
   const preview = derivativePath(full, 'preview')
   const thumb = derivativePath(full, 'thumb')
   await writeDerivative(full, preview, 1600, 82)
   await writeDerivative(full, thumb, 400, 72)
-  return { full, preview, thumb }
+  return { source, full, preview, thumb }
 }
 
 /** Fast path: if derivatives exist, return without queue; otherwise prepare. */
@@ -79,11 +92,12 @@ export async function resolvePhotoVariant(
   absPath: string,
   originalName: string | undefined,
   size: PhotoVariant,
+  rotation = 0,
 ): Promise<{ path: string; fullPath: string }> {
   let full = absPath
-  if (needsHeicConvert(absPath, originalName)) {
+  if (rotation !== 0 || needsHeicConvert(absPath, originalName)) {
     const prepared = await withImageQueue(() =>
-      preparePhotoDerivatives(absPath, originalName),
+      preparePhotoDerivatives(absPath, originalName, rotation),
     )
     full = prepared.full
     const chosen =
@@ -92,7 +106,7 @@ export async function resolvePhotoVariant(
         : size === 'full'
           ? prepared.full
           : prepared.preview
-    return { path: chosen, fullPath: full }
+    return { path: chosen, fullPath: prepared.source }
   }
 
   // Already JPEG/PNG — derivatives may still be missing
@@ -111,6 +125,16 @@ export async function resolvePhotoVariant(
   return {
     path: size === 'thumb' ? prepared.thumb : prepared.preview,
     fullPath: prepared.full,
+  }
+}
+
+/** Remove the source and cached variants, including all saved orientations. */
+export function removePhotoFiles(source: string) {
+  for (const rotation of [0, 90, 180, 270]) {
+    const full = rotatedPath(source, rotation)
+    for (const file of [full, derivativePath(full, 'preview'), derivativePath(full, 'thumb')]) {
+      fs.rmSync(file, { force: true })
+    }
   }
 }
 
