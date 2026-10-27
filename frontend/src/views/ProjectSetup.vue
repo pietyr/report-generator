@@ -27,7 +27,8 @@ async function load() {
     project.value = await api.getProject(id.value)
     name.value = project.value.name
     eventUrl.value = project.value.event_url
-    stats.value = structuredClone(project.value.stats)
+    // Avoid structuredClone — Vue deep-proxies project.stats and cannot be cloned that way
+    stats.value = JSON.parse(JSON.stringify(project.value.stats)) as StatsContent
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   }
@@ -56,7 +57,12 @@ async function onTemplate(e: Event) {
   uploading.value = true
   error.value = ''
   try {
-    project.value = await api.uploadTemplate(id.value, file)
+    const updated = await api.uploadTemplate(id.value, file)
+    project.value = updated
+    const warning = (updated as Project & { template_warning?: string }).template_warning
+    if (warning) {
+      error.value = `Szablon zapisany, ale bez tła (${warning}). Raporty użyją białego tła.`
+    }
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -98,7 +104,10 @@ watch(id, load)
             <input type="file" accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation" @change="onTemplate" />
           </label>
           <p v-if="project.background_path" class="ok">Tło slajdów treści wyodrębnione z szablonu.</p>
-          <p v-else class="muted">Wgraj szablon — użyjemy tła layoutu treści (nie slajdu tytułowego).</p>
+          <p v-else class="muted">
+            Szablon jest opcjonalny. Bez niego (lub gdy PPTX nie ma obrazu tła) slajdy z linkiem i
+            statystykami będą na białym tle.
+          </p>
           <p v-if="uploading" class="muted">Przetwarzanie szablonu…</p>
         </div>
 

@@ -143,10 +143,7 @@ async function generate() {
 }
 
 const canGenerate = computed(
-  () =>
-    !!project.value &&
-    project.value.partners.length > 0 &&
-    !!project.value.background_path,
+  () => !!project.value && project.value.partners.length > 0,
 )
 
 onMounted(load)
@@ -163,9 +160,9 @@ onUnmounted(stopPoll)
 
     <div class="card stack">
       <ul class="checklist">
-        <li :class="{ ok: !!project.background_path }">
+        <li :class="{ ok: true }">
           Szablon / tło:
-          {{ project.background_path ? 'OK' : 'brak — wróć do setupu' }}
+          {{ project.background_path ? 'OK (tło z szablonu)' : 'brak — białe tło (OK)' }}
         </li>
         <li :class="{ ok: project.partners.length > 0 }">
           Partnerzy: {{ project.partners.length }}

@@ -157,10 +157,10 @@ app.delete<{ Params: { id: string } }>('/api/projects/:id', async (req, reply) =
 app.post<{ Params: { id: string } }>(
   '/api/projects/:id/template',
   async (req, reply) => {
-    const project = db
+    const existing = db
       .prepare('SELECT * FROM projects WHERE id = ?')
       .get(req.params.id)
-    if (!project) return reply.code(404).send({ error: 'Nie znaleziono' })
+    if (!existing) return reply.code(404).send({ error: 'Nie znaleziono' })
 
     const file = await req.file()
     if (!file) return reply.code(400).send({ error: 'Brak pliku' })
@@ -170,15 +170,33 @@ app.post<{ Params: { id: string } }>(
     const buf = await file.toBuffer()
     fs.writeFileSync(templatePath, buf)
 
-    const bgBase = path.join(dir, 'background')
-    const { backgroundPath } = extractTemplateBackground(templatePath, bgBase)
+    let backgroundPath: string | null = null
+    let templateWarning: string | undefined
+    try {
+      const bgBase = path.join(dir, 'background')
+      backgroundPath = extractTemplateBackground(templatePath, bgBase).backgroundPath
+    } catch (err) {
+      // Empty / plain PPTX without media is allowed — event/stats slides use white bg
+      templateWarning =
+        err instanceof Error
+          ? err.message
+          : 'Nie udało się wyodrębnić tła z szablonu'
+      req.log.warn({ err }, 'template without extractable background')
+      // Clear any previous background file for this project
+      for (const f of fs.readdirSync(dir)) {
+        if (f.startsWith('background')) {
+          fs.rmSync(path.join(dir, f), { force: true })
+        }
+      }
+    }
 
     const now = new Date().toISOString()
     db.prepare(
       `UPDATE projects SET template_path = ?, background_path = ?, updated_at = ? WHERE id = ?`,
     ).run(templatePath, backgroundPath, now, req.params.id)
 
-    return getProject(req.params.id)
+    const result = getProject(req.params.id)
+    return templateWarning ? { ...result, template_warning: templateWarning } : result
   },
 )
 
