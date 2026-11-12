@@ -197,7 +197,7 @@ export const api = {
     ),
   latestGenerateDownloadUrl: (id: string) =>
     `/api/projects/${id}/generate/latest/download`,
-  startGenerate: (id: string) =>
+  startGenerate: (id: string, recipientIds: string[]) =>
     request<{
       jobId: string
       status: string
@@ -205,7 +205,11 @@ export const api = {
       total: number
       phase: string
       message: string
-    }>(`/api/projects/${id}/generate/start`, { method: 'POST' }),
+    }>(`/api/projects/${id}/generate/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipientIds }),
+    }),
   generateStatus: (id: string, jobId: string) =>
     request<{
       jobId: string

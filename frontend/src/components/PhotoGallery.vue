@@ -193,7 +193,10 @@ async function remove(photo: Photo) {
           <label v-for="partner in project.partners" :key="partner.id" class="check">
             <input v-model="partnerIds" type="checkbox" :value="partner.id" /> {{ partner.name }}
           </label>
-          <p class="muted intro">Bez wyboru = zdjęcie globalne (we wszystkich raportach).</p>
+          <p class="muted intro">
+            Bez wyboru = zdjęcie globalne (we wszystkich raportach). Wybranie samego stopnia,
+            bez firmy, utworzy też osobny raport tego stopnia.
+          </p>
         </fieldset>
       </fieldset>
       <p v-if="editError" class="error" role="alert">{{ editError }}</p>

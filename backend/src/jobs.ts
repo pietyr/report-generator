@@ -21,7 +21,10 @@ export function getJob(jobId: string) {
   return jobs.get(jobId)
 }
 
-export function startGenerateJob(projectId: string): GenerateJob {
+export function startGenerateJob(
+  projectId: string,
+  selectedRecipientIds?: string[],
+): GenerateJob {
   const id = randomUUID()
   const job: GenerateJob = {
     id,
@@ -37,12 +40,16 @@ export function startGenerateJob(projectId: string): GenerateJob {
 
   void (async () => {
     try {
-      const zipPath = await generateReportsZip(projectId, (p: GenerateProgress) => {
-        job.done = p.done
-        job.total = p.total
-        job.phase = p.phase
-        job.message = p.message
-      })
+      const zipPath = await generateReportsZip(
+        projectId,
+        (p: GenerateProgress) => {
+          job.done = p.done
+          job.total = p.total
+          job.phase = p.phase
+          job.message = p.message
+        },
+        selectedRecipientIds,
+      )
       job.zipPath = zipPath
       job.status = 'done'
       job.phase = 'done'

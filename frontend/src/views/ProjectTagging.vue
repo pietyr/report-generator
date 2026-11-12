@@ -178,7 +178,8 @@ watch(id, async () => {
             </button>
           </div>
           <p class="muted" style="margin: 0; font-size: 0.85rem">
-            Bez wyboru = zdjęcie globalne (we wszystkich raportach).
+            Bez wyboru = zdjęcie globalne (we wszystkich raportach). Wybranie
+            samego stopnia, bez firmy, utworzy też osobny raport tego stopnia.
           </p>
         </div>
 

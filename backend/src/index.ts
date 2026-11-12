@@ -808,13 +808,26 @@ app.get<{ Params: { id: string } }>(
   },
 )
 
-app.post<{ Params: { id: string } }>(
+app.post<{
+  Params: { id: string }
+  Body: { recipientIds?: string[] }
+}>(
   '/api/projects/:id/generate/start',
   async (req, reply) => {
     if (!db.prepare('SELECT id FROM projects WHERE id = ?').get(req.params.id)) {
       return reply.code(404).send({ error: 'Nie znaleziono' })
     }
-    const job = startGenerateJob(req.params.id)
+    const recipientIds = req.body?.recipientIds
+    if (
+      !Array.isArray(recipientIds) ||
+      recipientIds.length === 0 ||
+      recipientIds.some((recipientId) => typeof recipientId !== 'string')
+    ) {
+      return reply
+        .code(400)
+        .send({ error: 'Wybierz co najmniej jeden raport do wygenerowania' })
+    }
+    const job = startGenerateJob(req.params.id, [...new Set(recipientIds)])
     return {
       jobId: job.id,
       status: job.status,

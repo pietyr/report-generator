@@ -13,6 +13,34 @@ const photos = ref<Photo[]>([])
 const editingPhotos = ref(false)
 const photosChanged = ref(false)
 const tagged = computed(() => photos.value.filter((p) => p.category !== null || p.excluded === 1).length)
+const independentlyTaggedTiers = computed(() => {
+  if (!project.value) return []
+  return project.value.tiers.filter(
+    (tier) =>
+      photos.value.some(
+        (photo) =>
+          photo.excluded !== 1 &&
+          photo.category !== null &&
+          photo.partnerIds.length === 0 &&
+          photo.tierIds.includes(tier.id),
+      ),
+  )
+})
+const reportOptions = computed(() => [
+  ...(project.value?.partners || []).map((partner) => ({
+    id: `partner:${partner.id}`,
+    name: partner.name,
+    type: 'Firma',
+  })),
+  ...independentlyTaggedTiers.value.map((tier) => ({
+    id: `tier:${tier.id}`,
+    name: tier.name,
+    type: 'Raport zbiorczy',
+  })),
+].sort((a, b) => a.name.localeCompare(b.name, 'pl', { sensitivity: 'base' })))
+const reportOptionIds = computed(() => reportOptions.value.map((option) => option.id))
+const selectedReportIds = ref<string[]>([])
+const selectedReportCount = computed(() => selectedReportIds.value.length)
 const error = ref('')
 const generating = ref(false)
 const done = ref(false)
@@ -63,6 +91,14 @@ async function load() {
   }
 }
 
+function selectAllReports() {
+  selectedReportIds.value = [...reportOptionIds.value]
+}
+
+function clearReportSelection() {
+  selectedReportIds.value = []
+}
+
 function stopPoll() {
   if (pollTimer) {
     clearInterval(pollTimer)
@@ -92,6 +128,10 @@ async function downloadLatest() {
 
 async function generate() {
   if (editingPhotos.value || generating.value) return
+  if (selectedReportIds.value.length === 0) {
+    error.value = 'Wybierz co najmniej jeden raport do wygenerowania.'
+    return
+  }
   generating.value = true
   error.value = ''
   done.value = false
@@ -101,7 +141,7 @@ async function generate() {
   stopPoll()
 
   try {
-    const started = await api.startGenerate(id.value)
+    const started = await api.startGenerate(id.value, selectedReportIds.value)
     progressMessage.value = started.message
     progressDone.value = started.done
     progressTotal.value = started.total
@@ -143,11 +183,22 @@ async function generate() {
 }
 
 const canGenerate = computed(
-  () => !!project.value && project.value.partners.length > 0,
+  () => !!project.value && selectedReportCount.value > 0,
 )
 
 onMounted(load)
 watch(id, load)
+watch(
+  reportOptionIds,
+  (currentIds, previousIds = []) => {
+    const previouslyAvailable = new Set(previousIds)
+    const selected = new Set(selectedReportIds.value)
+    selectedReportIds.value = currentIds.filter(
+      (recipientId) =>
+        selected.has(recipientId) || !previouslyAvailable.has(recipientId),
+    )
+  },
+)
 onUnmounted(stopPoll)
 </script>
 
@@ -155,7 +206,8 @@ onUnmounted(stopPoll)
   <div v-if="project">
     <h1>Generuj raporty</h1>
     <p class="subtitle">
-      ZIP ze wszystkimi firmami (PPTX + PDF). Możesz wygenerować od nowa albo pobrać ostatni ZIP.
+      ZIP ze wszystkimi raportami (PPTX + PDF). Obejmuje firmy oraz stopnie oznaczone
+      na zdjęciach bez wskazania konkretnej firmy.
     </p>
 
     <div class="card stack">
@@ -164,8 +216,11 @@ onUnmounted(stopPoll)
           Szablon / tło:
           {{ project.background_path ? 'OK (tło z szablonu)' : 'brak — białe tło (OK)' }}
         </li>
-        <li :class="{ ok: project.partners.length > 0 }">
-          Partnerzy: {{ project.partners.length }}
+        <li :class="{ ok: reportOptions.length > 0 }">
+          Dostępne raporty: {{ reportOptions.length }}
+          <span v-if="independentlyTaggedTiers.length">
+            (w tym dla samych stopni: {{ independentlyTaggedTiers.map((tier) => tier.name).join(', ') }})
+          </span>
         </li>
         <li :class="{ ok: tagged > 0 }">
           Otagowane zdjęcia: {{ tagged }} / {{ photos.length }}
@@ -184,6 +239,32 @@ onUnmounted(stopPoll)
           <template v-else>jeszcze nie wygenerowany</template>
         </li>
       </ul>
+
+      <section class="report-picker stack" aria-labelledby="report-picker-title">
+        <div class="row picker-head">
+          <div>
+            <strong id="report-picker-title">Wybierz raporty do wygenerowania</strong>
+            <p class="muted picker-summary">
+              Zaznaczono: {{ selectedReportCount }} / {{ reportOptions.length }}
+            </p>
+          </div>
+          <div class="row">
+            <button type="button" class="btn ghost" :disabled="generating" @click="selectAllReports">
+              Zaznacz wszystkie
+            </button>
+            <button type="button" class="btn ghost" :disabled="generating" @click="clearReportSelection">
+              Wyczyść
+            </button>
+          </div>
+        </div>
+        <div class="report-options">
+          <label v-for="option in reportOptions" :key="option.id" class="report-option">
+            <input v-model="selectedReportIds" type="checkbox" :value="option.id" :disabled="generating" />
+            <span>{{ option.name }}</span>
+            <span class="badge">{{ option.type }}</span>
+          </label>
+        </div>
+      </section>
 
       <div v-if="generating || progressMessage" class="progress-block">
         <div class="progress-meta">
@@ -247,6 +328,38 @@ onUnmounted(stopPoll)
 }
 .checklist li.ok {
   color: var(--ok);
+}
+.report-picker {
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #faf8f5;
+}
+.picker-head {
+  justify-content: space-between;
+}
+.picker-summary {
+  margin: 0.2rem 0 0;
+}
+.report-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
+  gap: 0.5rem;
+}
+.report-option {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+}
+.report-option > span:not(.badge) {
+  flex: 1;
+}
+.report-option .badge {
+  font-size: 0.72rem;
 }
 .progress-block {
   display: flex;

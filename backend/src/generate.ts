@@ -38,6 +38,10 @@ type PhotoWithAssignments = PhotoRow & {
   tierIds: string[]
 }
 
+type ReportRecipient = PartnerRow & {
+  selectionId: string
+}
+
 export type GenerateProgress = {
   done: number
   total: number
@@ -95,6 +99,36 @@ function belongsToPartner(photo: PhotoWithAssignments, partner: PartnerRow) {
   if (photo.partnerIds.includes(partner.id)) return true
   if (photo.tierIds.includes(partner.tier_id)) return true
   return false
+}
+
+function buildReportRecipients(
+  partners: PartnerRow[],
+  tiers: TierRow[],
+  photos: PhotoWithAssignments[],
+): ReportRecipient[] {
+  const independentlyTaggedTierIds = new Set(
+    photos
+      .filter((photo) => photo.partnerIds.length === 0)
+      .flatMap((photo) => photo.tierIds),
+  )
+
+  const standaloneTiers: ReportRecipient[] = tiers
+    .filter((tier) => independentlyTaggedTierIds.has(tier.id))
+    .map((tier) => ({
+      id: `standalone-tier:${tier.id}`,
+      project_id: tier.project_id,
+      tier_id: tier.id,
+      name: tier.name,
+      selectionId: `tier:${tier.id}`,
+    }))
+
+  return [
+    ...partners.map((partner) => ({
+      ...partner,
+      selectionId: `partner:${partner.id}`,
+    })),
+    ...standaloneTiers,
+  ].sort((a, b) => naturalCompare(a.name, b.name))
 }
 
 function splitSortKey(photo: PhotoWithAssignments): number {
@@ -398,6 +432,7 @@ function safeFileName(name: string) {
 export async function generateReportsZip(
   projectId: string,
   onProgress?: (p: GenerateProgress) => void,
+  selectedRecipientIds?: string[],
 ): Promise<string> {
   const project = db
     .prepare('SELECT * FROM projects WHERE id = ?')
@@ -407,9 +442,42 @@ export async function generateReportsZip(
   const partners = db
     .prepare('SELECT * FROM partners WHERE project_id = ? ORDER BY name')
     .all(projectId) as PartnerRow[]
-  if (partners.length === 0) throw new Error('Brak partnerów w projekcie')
-
   const photos = loadPhotos(projectId)
+  const tiers = db
+    .prepare(
+      'SELECT * FROM tiers WHERE project_id = ? ORDER BY sort_order ASC, name ASC',
+    )
+    .all(projectId) as TierRow[]
+  const availableRecipients = buildReportRecipients(partners, tiers, photos)
+  const selectedIds = selectedRecipientIds
+    ? new Set(selectedRecipientIds)
+    : null
+  const recipients = selectedIds
+    ? availableRecipients.filter((recipient) =>
+        selectedIds.has(recipient.selectionId),
+      )
+    : availableRecipients
+
+  if (selectedIds) {
+    const availableIds = new Set(
+      availableRecipients.map((recipient) => recipient.selectionId),
+    )
+    const hasUnknownSelection = [...selectedIds].some(
+      (selectionId) => !availableIds.has(selectionId),
+    )
+    if (hasUnknownSelection) {
+      throw new Error('Wybrano raport, który nie jest dostępny w tym projekcie')
+    }
+  }
+
+  if (recipients.length === 0) {
+    throw new Error(
+      selectedIds
+        ? 'Wybierz co najmniej jeden raport do wygenerowania'
+        : 'Brak firm oraz samodzielnie otagowanych stopni, dla których można wygenerować raport',
+    )
+  }
+
   const stats = JSON.parse(project.stats_json) as StatsContent
   const backgroundPath = project.background_path
 
@@ -419,24 +487,24 @@ export async function generateReportsZip(
 
   const zip = new AdmZip()
   const errors: string[] = []
-  // Each partner: PPTX + PDF
-  const total = partners.length * 2
+  // Each report recipient: PPTX + PDF
+  const total = recipients.length * 2
   let done = 0
 
   const report = (phase: string, message: string) => {
     onProgress?.({ done, total, phase, message })
   }
 
-  report('start', `Start generowania dla ${partners.length} firm…`)
+  report('start', `Start generowania ${recipients.length} raportów…`)
 
-  for (const partner of partners) {
-    const base = safeFileName(partner.name)
+  for (const recipient of recipients) {
+    const base = safeFileName(recipient.name)
     const pptxPath = path.join(outRoot, `${base}.pptx`)
 
-    report('pptx', `PPTX: ${partner.name}`)
+    report('pptx', `PPTX: ${recipient.name}`)
     await buildPartnerPptx({
       project,
-      partner,
+      partner: recipient,
       photos,
       backgroundPath,
       stats,
@@ -444,19 +512,19 @@ export async function generateReportsZip(
     })
     zip.addLocalFile(pptxPath)
     done += 1
-    report('pptx', `PPTX gotowe: ${partner.name}`)
+    report('pptx', `PPTX gotowe: ${recipient.name}`)
 
-    report('pdf', `PDF: ${partner.name}`)
+    report('pdf', `PDF: ${recipient.name}`)
     try {
       const pdfPath = await convertPptxToPdf(pptxPath, outRoot)
       zip.addLocalFile(pdfPath)
     } catch (err) {
       errors.push(
-        `${partner.name}: ${err instanceof Error ? err.message : String(err)}`,
+        `${recipient.name}: ${err instanceof Error ? err.message : String(err)}`,
       )
     }
     done += 1
-    report('pdf', `PDF gotowe: ${partner.name}`)
+    report('pdf', `PDF gotowe: ${recipient.name}`)
   }
 
   if (errors.length > 0) {
