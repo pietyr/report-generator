@@ -202,6 +202,97 @@ app.post<{ Params: { id: string } }>(
 
 // ——— Tiers & Partners ———
 
+function normalizeImportedName(value: unknown) {
+  return typeof value === 'string' ? value.normalize('NFC').trim().replace(/\s+/g, ' ') : ''
+}
+
+app.post<{
+  Params: { id: string }
+  Body: { tiers?: unknown } | null
+}>('/api/projects/:id/partners/import', async (req, reply) => {
+  const projectId = req.params.id
+  if (!db.prepare('SELECT id FROM projects WHERE id = ?').get(projectId)) {
+    return reply.code(404).send({ error: 'Nie znaleziono' })
+  }
+
+  const input = req.body?.tiers
+  if (!Array.isArray(input) || input.length === 0) {
+    return reply.code(400).send({ error: 'Podaj co najmniej jeden stopień partnerstwa.' })
+  }
+
+  const importedTiers: { name: string; partners: string[] }[] = []
+  for (const tier of input) {
+    const { name: rawName, partners: rawPartners } = (tier ?? {}) as {
+      name?: unknown
+      partners?: unknown
+    }
+    const name = normalizeImportedName(rawName)
+    if (!name || !Array.isArray(rawPartners)) {
+      return reply.code(400).send({ error: 'Każdy stopień wymaga nazwy i listy firm.' })
+    }
+    const partners = rawPartners.map(normalizeImportedName)
+    if (partners.some((partner) => !partner)) {
+      return reply.code(400).send({ error: 'Każda firma wymaga nazwy.' })
+    }
+    importedTiers.push({ name, partners })
+  }
+
+  let addedTiers = 0
+  let addedPartners = 0
+  withTransaction(() => {
+    const tiers = db
+      .prepare('SELECT id, name, sort_order FROM tiers WHERE project_id = ? ORDER BY sort_order, name, id')
+      .all(projectId) as { id: string; name: string; sort_order: number }[]
+    let nextSortOrder = (tiers.at(-1)?.sort_order ?? -1) + 1
+    const tiersByName = new Map<string, string>()
+    for (const tier of tiers) {
+      const key = normalizeImportedName(tier.name).toLowerCase()
+      if (!tiersByName.has(key)) tiersByName.set(key, tier.id)
+    }
+
+    const partnerNamesByTier = new Map<string, Set<string>>()
+    const partners = db
+      .prepare('SELECT tier_id, name FROM partners WHERE project_id = ?')
+      .all(projectId) as { tier_id: string; name: string }[]
+    for (const partner of partners) {
+      const names = partnerNamesByTier.get(partner.tier_id) ?? new Set<string>()
+      names.add(normalizeImportedName(partner.name).toLowerCase())
+      partnerNamesByTier.set(partner.tier_id, names)
+    }
+
+    const insertTier = db.prepare(
+      'INSERT INTO tiers (id, project_id, name, sort_order) VALUES (?, ?, ?, ?)',
+    )
+    const insertPartner = db.prepare(
+      'INSERT INTO partners (id, project_id, tier_id, name) VALUES (?, ?, ?, ?)',
+    )
+    for (const tier of importedTiers) {
+      const key = tier.name.toLowerCase()
+      let tierId = tiersByName.get(key)
+      if (tierId === undefined) {
+        tierId = randomUUID()
+        insertTier.run(tierId, projectId, tier.name, nextSortOrder++)
+        tiersByName.set(key, tierId)
+        addedTiers++
+      }
+
+      const names = partnerNamesByTier.get(tierId) ?? new Set<string>()
+      partnerNamesByTier.set(tierId, names)
+      for (const name of tier.partners) {
+        const partnerKey = name.toLowerCase()
+        if (names.has(partnerKey)) continue
+        insertPartner.run(randomUUID(), projectId, tierId, name)
+        names.add(partnerKey)
+        addedPartners++
+      }
+    }
+
+    if (addedTiers || addedPartners) touch(projectId)
+  })
+
+  return { project: getProject(projectId), addedTiers, addedPartners }
+})
+
 app.put<{
   Params: { id: string }
   Body: {

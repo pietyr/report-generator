@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { api, type Project } from '../api'
+import { api, type PartnerImportTier, type Project } from '../api'
 
 const route = useRoute()
 const router = useRouter()
@@ -12,16 +12,113 @@ const error = ref('')
 const tierName = ref('')
 const partnerName = ref('')
 const partnerTierId = ref('')
+const importHtml = ref('')
+const importError = ref('')
+const importMessage = ref('')
+const readingFile = ref(false)
+const importing = ref(false)
+const importBusy = computed(() => readingFile.value || importing.value)
 
-async function load() {
+async function load(projectId: string) {
+  project.value = null
+  partnerTierId.value = ''
   error.value = ''
+  importHtml.value = ''
+  clearImportFeedback()
+  readingFile.value = false
+  importing.value = false
   try {
-    project.value = await api.getProject(id.value)
-    if (!partnerTierId.value && project.value.tiers[0]) {
-      partnerTierId.value = project.value.tiers[0].id
-    }
+    const loaded = await api.getProject(projectId)
+    if (id.value !== projectId) return
+    project.value = loaded
+    partnerTierId.value = loaded.tiers[0]?.id ?? ''
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    if (id.value === projectId) error.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
+function clearImportFeedback() {
+  importError.value = ''
+  importMessage.value = ''
+}
+
+async function readHtmlFile(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+
+  const projectId = id.value
+  clearImportFeedback()
+  readingFile.value = true
+  try {
+    const html = await file.text()
+    if (id.value === projectId) importHtml.value = html
+  } catch {
+    if (id.value === projectId) importError.value = 'Nie udało się odczytać pliku HTML.'
+  } finally {
+    if (id.value === projectId) readingFile.value = false
+  }
+}
+
+function readPartnerTiers(html: string) {
+  const template = document.createElement('template')
+  // Some copied Markdown escapes HTML tags and adds a backslash before line breaks.
+  template.innerHTML = /\\<[a-z]/i.test(html)
+    ? html.replace(/\\(?=<\/?[a-z]|\r?$)/gim, '')
+    : html
+
+  const tiers: PartnerImportTier[] = []
+  let skipped = false
+  for (const group of template.content.querySelectorAll('.partner-level')) {
+    const heading = Array.from(group.querySelectorAll('h1, h2, h3, h4, h5, h6')).find(
+      (element) => element.closest('.partner-level') === group,
+    )
+    const name = heading?.textContent?.trim()
+    if (!name) {
+      skipped = true
+      continue
+    }
+
+    const partners: string[] = []
+    for (const logo of group.querySelectorAll('img')) {
+      if (logo.closest('.partner-level') !== group) continue
+      const partner = logo.getAttribute('alt')?.trim()
+      if (partner) partners.push(partner)
+      else skipped = true
+    }
+    tiers.push({ name, partners })
+  }
+
+  return { tiers, skipped }
+}
+
+async function importPartners() {
+  if (importBusy.value || !importHtml.value.trim()) return
+  clearImportFeedback()
+  const { tiers, skipped } = readPartnerTiers(importHtml.value)
+  if (!tiers.length) {
+    importError.value = 'W kodzie HTML nie znaleziono stopni partnerstwa. Sprawdź, czy grupy z klasą partner-level mają nagłówki.'
+    return
+  }
+
+  const projectId = id.value
+  importing.value = true
+  try {
+    const result = await api.importPartners(projectId, tiers)
+    if (id.value !== projectId) return
+    project.value = result.project
+    if (!result.project.tiers.some((tier) => tier.id === partnerTierId.value)) {
+      partnerTierId.value = result.project.tiers[0]?.id ?? ''
+    }
+    importMessage.value = result.addedTiers || result.addedPartners
+      ? `Import zakończony. Dodane stopnie (${result.addedTiers}) i firmy (${result.addedPartners}) są na liście.`
+      : 'Wszystkie rozpoznane stopnie i firmy są już na liście.'
+    if (skipped) importMessage.value += ' Pominięto grupy bez nagłówka lub logotypy bez nazwy w atrybucie alt.'
+  } catch (e) {
+    if (id.value === projectId) importError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    if (id.value === projectId) importing.value = false
   }
 }
 
@@ -80,8 +177,7 @@ function partnersInTier(tierId: string) {
   return project.value?.partners.filter((p) => p.tier_id === tierId) ?? []
 }
 
-onMounted(load)
-watch(id, load)
+watch(id, load, { immediate: true })
 </script>
 
 <template>
@@ -91,8 +187,40 @@ watch(id, load)
       Stopnie od najwyższego (kolejność = ranking). Następnie firmy w stopniach.
     </p>
 
-    <div class="card stack">
-      <h3 style="margin: 0">Stopnie partnerstwa</h3>
+    <form class="card stack" @submit.prevent="importPartners">
+      <h3 style="margin: 0">Import partnerów z HTML</h3>
+      <p class="import-note muted">
+        Wklej kod lub wybierz plik HTML. Import dopisze brakujące stopnie i firmy do projektu.
+      </p>
+      <label class="field">
+        Kod HTML partnerów
+        <textarea
+          v-model="importHtml"
+          rows="5"
+          :disabled="importBusy"
+          @input="clearImportFeedback"
+        ></textarea>
+      </label>
+      <div class="row import-actions">
+        <label class="field">
+          Plik HTML
+          <input
+            type="file"
+            accept=".html,.htm,text/html"
+            :disabled="importBusy"
+            @change="readHtmlFile"
+          />
+        </label>
+        <button type="submit" class="btn accent" :disabled="importBusy || !importHtml.trim()">
+          {{ importing ? 'Importowanie…' : 'Importuj partnerów' }}
+        </button>
+      </div>
+      <p v-if="importError" class="error" role="alert">{{ importError }}</p>
+      <p v-if="importMessage" class="ok import-note" role="status">{{ importMessage }}</p>
+    </form>
+
+    <fieldset class="card stack partner-card" aria-labelledby="partner-tiers-title" :disabled="importing">
+      <h3 id="partner-tiers-title" style="margin: 0">Stopnie partnerstwa</h3>
       <div class="row">
         <input
           v-model="tierName"
@@ -128,10 +256,10 @@ watch(id, load)
         </li>
       </ul>
       <p v-if="!project.tiers.length" class="muted">Dodaj przynajmniej jeden stopień.</p>
-    </div>
+    </fieldset>
 
-    <div class="card stack" style="margin-top: 1rem">
-      <h3 style="margin: 0">Firmy</h3>
+    <fieldset class="card stack partner-card" aria-labelledby="partner-companies-title" :disabled="importing">
+      <h3 id="partner-companies-title" style="margin: 0">Firmy</h3>
       <div class="row">
         <select v-model="partnerTierId" style="min-width: 12rem" :disabled="!project.tiers.length">
           <option v-for="t in project.tiers" :key="t.id" :value="t.id">{{ t.name }}</option>
@@ -174,9 +302,8 @@ watch(id, load)
         </ul>
         <p v-if="!partnersInTier(t.id).length" class="muted">Brak firm w tym stopniu.</p>
       </div>
-    </div>
+    </fieldset>
 
-    <p v-if="error" class="error">{{ error }}</p>
     <div class="row" style="margin-top: 1rem">
       <button class="btn secondary" @click="router.push(`/projects/${id}`)">← Setup</button>
       <button class="btn secondary" @click="router.push(`/projects/${id}/photos`)">
@@ -184,10 +311,21 @@ watch(id, load)
       </button>
     </div>
   </div>
+  <p v-else-if="error" class="error" role="alert">{{ error }}</p>
   <p v-else class="muted">Ładowanie…</p>
 </template>
 
 <style scoped>
+.import-note {
+  margin: 0;
+}
+.import-actions {
+  align-items: flex-end;
+}
+.partner-card {
+  margin: 1rem 0 0;
+  min-inline-size: 0;
+}
 .tier-block {
   border-top: 1px solid var(--line);
   padding-top: 0.75rem;

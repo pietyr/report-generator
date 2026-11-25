@@ -3,6 +3,7 @@ export type StatsContent = { title: string; lines: StatsLine[] }
 
 export type Tier = { id: string; project_id: string; name: string; sort_order: number }
 export type Partner = { id: string; project_id: string; tier_id: string; name: string }
+export type PartnerImportTier = { name: string; partners: string[] }
 
 export type Project = {
   id: string
@@ -99,6 +100,15 @@ export const api = {
       body: fd,
     })
   },
+  importPartners: (id: string, tiers: PartnerImportTier[]) =>
+    request<{ project: Project; addedTiers: number; addedPartners: number }>(
+      `/api/projects/${id}/partners/import`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tiers }),
+      },
+    ),
   addTier: (id: string, name: string) =>
     request<Project>(`/api/projects/${id}/tiers`, {
       method: 'POST',
