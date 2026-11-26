@@ -318,6 +318,8 @@ function addStatsSlide(
 async function buildPartnerPptx(opts: {
   project: ProjectRow
   partner: PartnerRow
+  /** Collective (tier) report only: partners of that tier, in report order. */
+  tierPartners?: PartnerRow[]
   photos: PhotoWithAssignments[]
   backgroundPath: string | null
   stats: StatsContent
@@ -333,7 +335,22 @@ async function buildPartnerPptx(opts: {
     opts.photos.filter((p) => belongsToPartner(p, opts.partner)),
   )
 
-  for (const photo of sorted.filter((p) => p.category === 1)) {
+  // Collective report: after the shared slides, append each tier partner's own
+  // slides, partner by partner. A photo tagged with several partners appears once.
+  const includedIds = new Set(sorted.map((p) => p.id))
+  const partnerBlocks: PhotoWithAssignments[] = []
+  for (const tierPartner of opts.tierPartners ?? []) {
+    const own = sortPhotosForPartner(
+      opts.photos.filter(
+        (p) => !includedIds.has(p.id) && p.partnerIds.includes(tierPartner.id),
+      ),
+    )
+    for (const p of own) includedIds.add(p.id)
+    partnerBlocks.push(...own)
+  }
+  const all = [...sorted, ...partnerBlocks]
+
+  for (const photo of all.filter((p) => p.category === 1)) {
     await addImageSlide(pptx, {
       imagePath: await resolvePhotoPath(opts.project.id, photo),
       cover: true,
@@ -343,14 +360,14 @@ async function buildPartnerPptx(opts: {
   addEventPageSlide(pptx, opts.backgroundPath, opts.project.event_url)
   addStatsSlide(pptx, opts.backgroundPath, opts.stats)
 
-  for (const photo of sorted.filter((p) => p.category !== 1 && p.category !== 15)) {
+  for (const photo of all.filter((p) => p.category !== 1 && p.category !== 15)) {
     await addImageSlide(pptx, {
       imagePath: await resolvePhotoPath(opts.project.id, photo),
       cover: false,
     })
   }
 
-  for (const photo of sorted.filter((p) => p.category === 15)) {
+  for (const photo of all.filter((p) => p.category === 15)) {
     await addImageSlide(pptx, {
       imagePath: await resolvePhotoPath(opts.project.id, photo),
       cover: true,
@@ -502,9 +519,15 @@ export async function generateReportsZip(
     const pptxPath = path.join(outRoot, `${base}.pptx`)
 
     report('pptx', `PPTX: ${recipient.name}`)
+    const isCollective = recipient.selectionId.startsWith('tier:')
     await buildPartnerPptx({
       project,
       partner: recipient,
+      tierPartners: isCollective
+        ? partners
+            .filter((partner) => partner.tier_id === recipient.tier_id)
+            .sort((a, b) => naturalCompare(a.name, b.name))
+        : undefined,
       photos,
       backgroundPath,
       stats,
